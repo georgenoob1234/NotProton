@@ -1,4 +1,4 @@
-name: Sync upstream macOS 15
+name: Sync upstream and rebuild macOS 15
 
 on:
   schedule:
@@ -22,13 +22,13 @@ jobs:
           git config user.name github-actions
           git config user.email github-actions@github.com
 
-      - name: Add upstream
+      - name: Sync upstream
         run: |
           git remote add upstream https://github.com/NotProtonNot/NotProton.git || true
           git fetch upstream
           git fetch origin
 
-      - name: Rebuild clean branch
+      - name: Reapply macOS patch
         run: |
           git checkout clean-macos15
           git reset --hard upstream/main
