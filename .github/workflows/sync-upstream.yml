@@ -1,4 +1,4 @@
-name: Sync upstream with macOS 15 patch
+name: Sync upstream macOS 15
 
 on:
   schedule:
@@ -13,30 +13,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Configure git
         run: |
-          git config user.name "github-actions"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name github-actions
+          git config user.email github-actions@github.com
 
       - name: Add upstream
         run: |
           git remote add upstream https://github.com/NotProtonNot/NotProton.git || true
-
-      - name: Fetch upstream
-        run: |
           git fetch upstream
+          git fetch origin
 
-      - name: Rebuild clean-macos15 branch
+      - name: Rebuild clean branch
         run: |
           git checkout clean-macos15
           git reset --hard upstream/main
-          git cherry-pick 0a1a625
+          git cherry-pick origin/macos15-patch
 
-      - name: Push update
+      - name: Push
         run: |
-          git push origin clean-macos15 --force
+          git push origin clean-macos15 --force-with-lease
