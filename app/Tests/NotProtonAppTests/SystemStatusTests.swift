@@ -463,6 +463,99 @@ struct ActivationQuestionTests {
 }
 
 @MainActor
+@Suite("Install source confirmations")
+struct InstallSourceConfirmationTests {
+
+    private func install(_ name: String) -> CrossOverInstall {
+        let build = SupportedRunners.all[0]
+        return CrossOverInstall(
+            bundle: URL(filePath: "/Applications/\(name).app"),
+            releaseVersion: build.releaseVersion,
+            support: .supported(build)
+        )
+    }
+
+    private func status(with installs: [CrossOverInstall]) -> SystemStatus {
+        let status = SystemStatus()
+        status.snapshot = StatusSnapshot(
+            steam: .installed(version: "test"),
+            steamRunning: false,
+            updateBlocked: false,
+            crossOver: installs,
+            runner: .none,
+            payload: PayloadState(
+                expected: 0, present: 0, missing: [], overlayShimPresent: true,
+                iconmakerPresent: true, appinfoPresent: true, signatureDatabase: "test",
+                legacyCompatPresent: 0, legacyCompatExpected: 0
+            ),
+            installContent: .current
+        )
+        return status
+    }
+
+    @Test("Continue Anyway keeps the explicitly selected unlicensed copy")
+    func keepsSelectedSource() async {
+        let copyA = install("CrossOver A")
+        let copyB = install("CrossOver B")
+        let status = status(with: [copyA, copyB])
+        var used: CrossOverInstall?
+        status.installForTesting = { used = $0 }
+
+        await status.requestInstall(from: copyB)
+        #expect(status.pendingConfirmation == .installUnlicensed)
+        #expect(status.pendingInstallSource?.id == copyB.id)
+
+        await status.continueInstallAnyway()
+
+        #expect(used?.id == copyB.id)
+        #expect(used?.id != copyA.id)
+        #expect(status.pendingConfirmation == nil)
+        #expect(status.pendingInstallSource == nil)
+    }
+
+    @Test("Cancelling an unlicensed install clears its source and does not start it")
+    func cancellationDoesNotInstall() async {
+        let copyA = install("CrossOver A")
+        let copyB = install("CrossOver B")
+        let status = status(with: [copyA, copyB])
+        var started = false
+        status.installForTesting = { _ in started = true }
+
+        await status.requestInstall(from: copyB)
+        status.pendingConfirmation = nil
+        await status.continueInstallAnyway()
+
+        #expect(!started)
+        #expect(status.pendingInstallSource == nil)
+    }
+
+    @Test("Replacing a confirmation clears the saved install source")
+    func replacementClearsSource() async {
+        let copyB = install("CrossOver B")
+        let status = status(with: [install("CrossOver A"), copyB])
+
+        await status.requestInstall(from: copyB)
+        #expect(status.pendingInstallSource?.id == copyB.id)
+        status.pendingConfirmation = .blockUpdates
+
+        #expect(status.pendingInstallSource == nil)
+    }
+
+    @Test("A status install without an explicit source keeps the fallback copy")
+    func normalFallbackKeepsExistingBehavior() async {
+        let copyA = install("CrossOver A")
+        let copyB = install("CrossOver B")
+        let status = status(with: [copyA, copyB])
+        var used: CrossOverInstall?
+        status.installForTesting = { used = $0 }
+
+        await status.installIntoSteam()
+
+        #expect(used?.id == copyA.id)
+    }
+}
+
+@MainActor
 @Suite("Run bookkeeping")
 struct PerformTests {
 

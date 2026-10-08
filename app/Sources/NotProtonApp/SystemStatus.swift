@@ -69,6 +69,8 @@ final class SystemStatus {
     // Tests replace the refresh so a run does not modify the real Steam/support folders
     // if run on an actual user's machine.
     @ObservationIgnored var refreshAfterRun: @MainActor (SystemStatus) async -> Void = { await $0.refresh() }
+    // Tests can observe source selection without touching the user's Steam bundle.
+    @ObservationIgnored var installForTesting: (@MainActor (CrossOverInstall?) async -> Void)?
     private var checkingLicense = false
 
     var isBusy: Bool { activity != nil || runInFlight || checkingLicense }
@@ -86,7 +88,14 @@ final class SystemStatus {
         var id: Self { self }
     }
 
-    var pendingConfirmation: Confirmation?
+    var pendingConfirmation: Confirmation? {
+        didSet {
+            if pendingConfirmation != .installUnlicensed {
+                pendingInstallSource = nil
+            }
+        }
+    }
+    private(set) var pendingInstallSource: CrossOverInstall?
     var generation = 0
 
     func beginRun(_ label: String) -> Int {
@@ -192,19 +201,32 @@ final class SystemStatus {
         }
     }
 
-    func requestInstall() async {
+    func requestInstall(from chosen: CrossOverInstall? = nil) async {
         guard canInstall else { return }
+        let install = chosen ?? usableCrossOver
         checkingLicense = true
         defer { checkingLicense = false }
         if let question = Self.activationQuestion(
             .install,
-            licensed: await checkLicense()?.licensed,
+            licensed: await checkLicense(for: install)?.licensed,
             runner: snapshot?.runner ?? RunnerState.none
         ) {
+            pendingInstallSource = install
             pendingConfirmation = question
         } else {
-            await installIntoSteam()
+            pendingInstallSource = nil
+            await installIntoSteam(from: install)
         }
+    }
+
+    // Continue an unlicensed install with the exact source that was checked. This
+    // intentionally does not fall back to another CrossOver copy.
+    func continueInstallAnyway() async {
+        guard pendingConfirmation == .installUnlicensed else { return }
+        let install = pendingInstallSource
+        pendingInstallSource = nil
+        pendingConfirmation = nil
+        await installIntoSteam(from: install)
     }
 
     func requestCompatibilityTool(
@@ -401,7 +423,13 @@ final class SystemStatus {
         }
     }
 
-    func installIntoSteam() async {
+    func installIntoSteam(from chosen: CrossOverInstall? = nil) async {
+        defer { pendingInstallSource = nil }
+        let install = chosen ?? usableCrossOver
+        if let installForTesting {
+            await installForTesting(install)
+            return
+        }
         await perform(from: InstallPhase.checkingPayload.label) { progress in
             let lock = try DeploymentContent.acquireInstallationLock(for: SupportPaths.Steam.app)
             defer { close(lock) }
@@ -411,7 +439,6 @@ final class SystemStatus {
 
             var parts = ["NotProton successfully installed."]
             if result.stoppedClient { parts.append(Self.restartHint) }
-            let install = usableCrossOver
             let state = await Task.detached(priority: .userInitiated) {
                 (runner: RunnerStore.state(),
                  payload: PayloadInspector.inspect(),
