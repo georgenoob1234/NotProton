@@ -124,6 +124,33 @@ enum Shell {
         try process.run()
     }
 
+    static func logged(
+        _ executable: String,
+        _ arguments: [String],
+        environment: [String: String],
+        to log: URL
+    ) throws -> Int32 {
+        try Data().write(to: log, options: .atomic)
+        let handle = try FileHandle(forWritingTo: log)
+        defer { try? handle.close() }
+
+        let process = Process()
+        process.executableURL = URL(filePath: executable)
+        process.arguments = arguments
+        process.environment = environment
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = handle
+        process.standardError = handle
+        do {
+            try process.run()
+        } catch {
+            try? handle.write(contentsOf: Data("\(error.localizedDescription)\n".utf8))
+            throw error
+        }
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+
     static func processIsRunning(
         named name: String, pgrep: String = "/usr/bin/pgrep",
         drainTimeout: DispatchTimeInterval = outputDrainTimeout

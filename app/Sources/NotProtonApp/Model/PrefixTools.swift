@@ -229,6 +229,94 @@ enum PrefixTools {
         )
     }
 
+    // Download the pinned upstream script on first use rather than shipping it in the app.
+    static let winetricksRelease = "20260125"
+    static let winetricksSHA256 = "431f82fc74000e6c864409f1d8fb495d696c03928808e3e8acffc45179312a7b"
+    static let winetricksLogName = "winetricks.log"
+
+    static func winetricksVerbs(_ text: String) -> [String] {
+        text.split(whereSeparator: \.isWhitespace).map(String.init)
+    }
+
+    private static func validateWinetricks(_ verbs: [String], prefix: WinePrefix) throws {
+        let step = "Run Winetricks"
+        guard !verbs.isEmpty, verbs.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            throw StepFailure(step: step, detail: "Enter at least one verb, like vcrun2022.")
+        }
+        if let refused = verbs.first(where: {
+            let value = $0.lowercased()
+            // Accept verbs only: options such as --self-update would bypass the script pin.
+            return value == "annihilate" || value.hasPrefix("prefix=")
+                || value.hasPrefix("wineprefix=") || value.hasPrefix("-")
+        }) {
+            throw StepFailure(step: step, detail: "NotProton does not run the \(refused) verb.")
+        }
+        // Winetricks can source custom .verb files as shell code. Only accept built-in verb
+        // names and settings, so input cannot supply a script that changes another prefix.
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_=-")
+        guard verbs.allSatisfy({ $0.unicodeScalars.allSatisfy { allowed.contains($0) } }) else {
+            throw StepFailure(step: step, detail: "Enter built-in Winetricks verbs or settings, not file paths.")
+        }
+        guard !PrefixStore.isInUse(prefix) else {
+            throw StepFailure(step: step, detail: "\(prefix.title) is running. Quit the game first.")
+        }
+    }
+
+    static func winetricks(_ verbs: [String], in prefix: WinePrefix) async throws -> URL {
+        let step = "Run Winetricks"
+        try validateWinetricks(verbs, prefix: prefix)
+        let chosen = try resolvedTool(step: step, for: prefix)
+        let runner = SupportPaths.clonedRoot(forBuild: chosen.build)
+        _ = try readyLoader(step: step, prefix: prefix, runner: runner, flavor: chosen.tool.flavor)
+        do {
+            let script = try await PinnedDownload.obtain(
+                file: "winetricks",
+                sha256: winetricksSHA256,
+                bases: [URL(string: "https://raw.githubusercontent.com/Winetricks/winetricks/\(winetricksRelease)/src")!],
+                into: SupportPaths.winetricksDownloads,
+                step: step,
+                from: "GitHub"
+            )
+            return try winetricks(
+                verbs, in: prefix, script: script, runner: runner, flavor: chosen.tool.flavor
+            )
+        } catch {
+            let log = prefix.root.appending(path: winetricksLogName)
+            if let handle = try? FileHandle(forWritingTo: log) {
+                defer { try? handle.close() }
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: Data("\n\(error.localizedDescription)\n".utf8))
+            } else {
+                try? Data("\(error.localizedDescription)\n".utf8).write(to: log, options: .atomic)
+            }
+            throw error
+        }
+    }
+
+    static func winetricks(
+        _ verbs: [String], in prefix: WinePrefix, script: URL, runner: URL,
+        flavor: CompatTool.Flavor = .fex
+    ) throws -> URL {
+        let step = "Run Winetricks"
+        try validateWinetricks(verbs, prefix: prefix)
+        let loader = try readyLoader(step: step, prefix: prefix, runner: runner, flavor: flavor)
+        // Reuse the same loader, wineserver, DLL paths and sync backend as the existing tools.
+        var environment = environment(prefix: prefix, runner: runner, flavor: flavor)
+        environment["WINE"] = loader.path(percentEncoded: false)
+        let log = prefix.root.appending(path: winetricksLogName)
+        let status = try Shell.logged(
+            "/bin/sh", [script.path(percentEncoded: false), "-q"] + verbs,
+            environment: environment, to: log
+        )
+        guard status == 0 else {
+            throw StepFailure(
+                step: step,
+                detail: "Winetricks stopped with status \(status). Its output is in \(log.path(percentEncoded: false))."
+            )
+        }
+        return log
+    }
+
     static func arguments(for executable: URL) -> [String]? {
         let path = executable.path(percentEncoded: false)
         switch executable.pathExtension.lowercased() {

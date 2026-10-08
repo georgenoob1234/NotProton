@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 
@@ -25,6 +26,92 @@ struct PrefixToolsTests {
             library: SteamLibrary(root: URL(filePath: "/Users/tester/Library/Application Support/Steam")),
             lastUsed: nil
         )
+    }
+
+    @Test("Winetricks rejects dangerous input before touching a prefix")
+    func winetricksRefusesEarly() throws {
+        let root = try scratchDirectory("winetricks-refusal")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let prefix = WinePrefix(appID: "480", name: nil, library: SteamLibrary(root: root), lastUsed: nil)
+        let script = root.appending(path: "winetricks")
+        #expect(PrefixTools.winetricksVerbs("  vcrun2022\tcorefonts \n") == ["vcrun2022", "corefonts"])
+
+        for text in [" ", "corefonts annihilate", "ANNIHILATE", "prefix=other corefonts",
+                     "WINEPREFIX=/tmp/other", "--self-update", "/tmp/custom.verb", "custom.verb"] {
+            let failure = #expect(throws: StepFailure.self) {
+                try PrefixTools.winetricks(
+                    PrefixTools.winetricksVerbs(text), in: prefix, script: script, runner: root)
+            }
+            #expect(failure?.detail.contains("No compatibility tool") == false)
+        }
+        let failure = #expect(throws: StepFailure.self) {
+            try PrefixTools.winetricks(["corefonts"], in: prefix, script: script, runner: root)
+        }
+        #expect(failure?.detail.contains("No compatibility tool") == true)
+        #expect(!FileManager.default.fileExists(atPath: prefix.root.path(percentEncoded: false)))
+    }
+
+    @Test("Winetricks refuses a prefix locked by a running game")
+    func winetricksRefusesActivePrefix() throws {
+        let root = try scratchDirectory("winetricks-active")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let prefix = WinePrefix(appID: "480", name: nil, library: SteamLibrary(root: root), lastUsed: nil)
+        try FileManager.default.createDirectory(at: prefix.pfx, withIntermediateDirectories: true)
+        let lock = open(prefix.root.appending(path: ".notproton-prefix.lock").path(percentEncoded: false),
+                        O_CREAT | O_RDWR, mode_t(0o600))
+        #expect(lock >= 0)
+        guard lock >= 0 else { return }
+        defer { close(lock) }
+        #expect(flock(lock, LOCK_EX | LOCK_NB) == 0)
+        let failure = #expect(throws: StepFailure.self) {
+            try PrefixTools.winetricks(
+                ["corefonts"], in: prefix, script: root.appending(path: "winetricks"), runner: root)
+        }
+        #expect(failure?.detail.contains("Quit the game first") == true)
+        #expect(!FileManager.default.fileExists(
+            atPath: prefix.root.appending(path: PrefixTools.winetricksLogName).path(percentEncoded: false)))
+    }
+
+    @Test("Winetricks uses the selected prefix and runner, and preserves both output streams")
+    func winetricksUsesRunnerAndLogs() throws {
+        let root = try scratchDirectory("winetricks-run")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = SteamLibrary(root: root)
+        let prefix = WinePrefix(appID: "480", name: nil, library: library, lastUsed: nil)
+        let other = WinePrefix(appID: "481", name: nil, library: library, lastUsed: nil)
+        try FileManager.default.createDirectory(at: prefix.pfx, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: other.pfx, withIntermediateDirectories: true)
+        let marker = other.pfx.appending(path: "untouched")
+        try Data("keep".utf8).write(to: marker)
+        let runner = root.appending(path: "runner with spaces")
+        let loader = runner.appending(path: "lib/wine/x86_64-unix/wine")
+        try FileManager.default.createDirectory(at: loader.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: loader)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: loader.path(percentEncoded: false))
+        let script = root.appending(path: "fake winetricks")
+        try Data("""
+            printf '%s\\n' "$WINEPREFIX" "$WINE" "$WINELOADER" "$WINESERVER" "$CX_ROOT" "$PATH" "$@"
+            printf 'installer error\\n' >&2
+            exit 7
+            """.utf8).write(to: script)
+        let failure = #expect(throws: StepFailure.self) {
+            try PrefixTools.winetricks(["corefonts"], in: prefix, script: script, runner: runner, flavor: .rosetta)
+        }
+        let log = prefix.root.appending(path: PrefixTools.winetricksLogName)
+        #expect(failure?.detail.contains("status 7") == true)
+        #expect(failure?.detail.contains(log.path(percentEncoded: false)) == true)
+        let output = try String(contentsOf: log, encoding: .utf8)
+        #expect(output.contains(prefix.pfx.path(percentEncoded: false)))
+        #expect(output.contains(loader.path(percentEncoded: false)))
+        #expect(output.contains(runner.appending(path: "bin").path(percentEncoded: false) + ":"))
+        #expect(output.contains("-q\ncorefonts\n"))
+        #expect(output.contains("installer error"))
+        #expect(try String(contentsOf: marker, encoding: .utf8) == "keep")
+        #expect(!FileManager.default.fileExists(
+            atPath: other.root.appending(path: PrefixTools.winetricksLogName).path(percentEncoded: false)))
+        try Data("printf 'installed\\n'\n".utf8).write(to: script)
+        #expect(try PrefixTools.winetricks(["corefonts"], in: prefix, script: script, runner: runner, flavor: .rosetta) == log)
+        #expect(try String(contentsOf: log, encoding: .utf8) == "installed\n")
     }
 
     @Test("The runner variables are the ones RUN_SCRIPT exports")
