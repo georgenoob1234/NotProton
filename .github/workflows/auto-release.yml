@@ -1,0 +1,41 @@
+name: Auto Release
+
+on:
+  workflow_run:
+    workflows:
+      - app
+    types:
+      - completed
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download app artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: NotProton
+          path: release
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="macos15-${GITHUB_RUN_NUMBER}"
+
+          gh release create "v${VERSION}" \
+            release/NotProton.zip \
+            --title "NotProton ${VERSION}" \
+            --notes "Automatic macOS 15 build"
