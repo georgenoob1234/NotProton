@@ -1,0 +1,208 @@
+name: Re-release upstream with macOS 15 patch
+
+on:
+  schedule:
+    - cron: "17 * * * *"   # hourly
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream tag to (re)build, e.g. v1.0.0. Leave empty to build any missing releases."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rerelease
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: NotProtonNot/NotProton
+  PATCH_BRANCH: macos15-patch
+  SUFFIX: macos15
+  MAX_PER_RUN: "3"
+  DOBBY_COMMIT: "5dfc8546954ce3b3198132ab13fddb89ee92cdd7"
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      tags: ${{ steps.find.outputs.tags }}
+    steps:
+      - name: Find upstream releases we haven't re-released
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$INPUT_TAG" ]; then
+            jq -cn --arg t "$INPUT_TAG" '[$t]' > tags.json
+          else
+            gh api "repos/$UPSTREAM/releases?per_page=100" --paginate \
+              --jq '.[] | select(.draft | not) | .tag_name' > upstream.txt
+            gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 \
+              --json tagName --jq '.[].tagName' > mine.txt || true
+
+            : > missing.txt
+            while read -r tag; do
+              [ -z "$tag" ] && continue
+              if ! grep -qxF "${tag}-${SUFFIX}" mine.txt; then
+                echo "$tag" >> missing.txt
+              fi
+            done < upstream.txt
+
+            # newest first from the API; cap how many we build per run
+            head -n "$MAX_PER_RUN" missing.txt | jq -R . | jq -cs . > tags.json
+          fi
+
+          echo "tags=$(cat tags.json)" >> "$GITHUB_OUTPUT"
+          echo "Will build: $(cat tags.json)"
+
+  build-and-release:
+    needs: detect
+    if: ${{ needs.detect.outputs.tags != '[]' && needs.detect.outputs.tags != '' }}
+    runs-on: xcode-27
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        tag: ${{ fromJSON(needs.detect.outputs.tags) }}
+    env:
+      TAG: ${{ matrix.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout upstream at the release tag
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.UPSTREAM }}
+          ref: ${{ matrix.tag }}
+          fetch-depth: 0
+
+      - name: Apply the macOS 15 patch commit
+        id: patch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add fork "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch fork "$PATCH_BRANCH"
+          # Tip of the patch branch only
+          git cherry-pick fork/"$PATCH_BRANCH"
+          echo "sha=$(git rev-parse --short fork/$PATCH_BRANCH)" >> "$GITHUB_OUTPUT"
+
+      # ---- build steps copied from app.yml ----
+      - name: Record the toolchain
+        run: |
+          sudo xcode-select -s /Applications/Xcode_27.0.app
+          xcodebuild -version
+          swift --version
+
+      - name: Install cross compilers
+        run: brew install mingw-w64 bison flex
+
+      - name: Clone Dobby at the pinned commit
+        run: |
+          rm -rf vendor/dobby
+          git clone --no-checkout https://github.com/jmpews/Dobby.git vendor/dobby
+          git -C vendor/dobby checkout "$DOBBY_COMMIT"
+
+      - name: Restore Dobby build cache
+        id: dobby-cache
+        uses: actions/cache@v4
+        with:
+          path: build/dobby
+          key: dobby-xcode-27-${{ env.DOBBY_COMMIT }}-${{ runner.arch }}
+
+      - name: Build Dobby
+        if: steps.dobby-cache.outputs.cache-hit != 'true'
+        run: make dobby
+
+      - name: Restore the Wine trees
+        id: wine-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            scratch/wine
+            scratch/wine-build-dual
+            scratch/wine-build-arm64
+          key: wine-xcode-27-${{ hashFiles('bridge/setup-wine-tree.sh', 'bridge/register-components.diff') }}
+
+      - name: Restore Proton tarball cache
+        uses: actions/cache@v4
+        with:
+          path: scratch/proton-lsc
+          key: proton-tarball-${{ hashFiles('lsteamclient/fetch.sh') }}
+
+      - name: Build the dylib
+        run: make all
+
+      - name: Build the overlay shim
+        run: make overlay-shim
+
+      - name: Build helpers
+        run: make iconmaker appinfo
+
+      - name: Build the bridge
+        run: make bridge
+
+      - name: Save the Wine trees
+        if: steps.wine-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            scratch/wine
+            scratch/wine-build-dual
+            scratch/wine-build-arm64
+          key: wine-xcode-27-${{ hashFiles('bridge/setup-wine-tree.sh', 'bridge/register-components.diff') }}
+
+      - name: Stage the app payload
+        run: make app-payload
+
+      - name: Build the app
+        run: make app
+
+      - name: Package the app bundle
+        run: |
+          mkdir -p out/artifact
+          ditto -c -k --keepParent out/NotProton.app out/artifact/NotProton.zip
+      # ---- end of copied build steps ----
+
+      - name: Create the release
+        env:
+          PATCH_SHA: ${{ steps.patch.outputs.sha }}
+        run: |
+          set -euo pipefail
+          NEW="${TAG}-${SUFFIX}"
+
+          # Pull the upstream release's title, notes, URL and prerelease flag
+          gh release view "$TAG" --repo "$UPSTREAM" \
+            --json name,body,url,isPrerelease > upstream.json
+
+          NAME=$(jq -r '.name // empty' upstream.json)
+          [ -z "$NAME" ] && NAME="$TAG"
+          URL=$(jq -r '.url' upstream.json)
+          PRE=$(jq -r '.isPrerelease' upstream.json)
+
+          {
+            echo "macOS 15 build of upstream [\`${TAG}\`](${URL}) with the \`${PATCH_BRANCH}\` patch (\`${PATCH_SHA}\`) applied."
+            echo
+            echo "---"
+            echo
+            jq -r '.body // ""' upstream.json
+          } > notes.md
+
+          FLAGS=""
+          [ "$PRE" = "true" ] && FLAGS="--prerelease"
+
+          # Replace an existing re-release (manual rebuilds)
+          gh release delete "$NEW" --repo "$GITHUB_REPOSITORY" --cleanup-tag -y 2>/dev/null || true
+
+          gh release create "$NEW" out/artifact/NotProton.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "${NAME} (macOS 15)" \
+            --notes-file notes.md \
+            $FLAGS
