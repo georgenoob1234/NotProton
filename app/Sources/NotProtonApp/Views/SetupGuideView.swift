@@ -293,7 +293,7 @@ struct SetupGuideView: View {
         VStack(alignment: .leading, spacing: 10) {
             switch step {
             case .requirements:
-                Text(GuideCopy.text("NotProton is free; CrossOver needs activation. This app requires macOS 26 or later. Exact supported builds are listed in Status."))
+                Text(GuideCopy.text("NotProton is free; CrossOver needs activation. This app requires macOS 15 or later. Exact supported builds are listed in Status."))
                 if let source {
                     Text(source.bundle.path(percentEncoded: false)).textSelection(.enabled)
                     if case .supported(let build) = source.support { Text("\(build.displayVersion) · build \(build.bundleVersion)") }

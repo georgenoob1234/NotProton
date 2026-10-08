@@ -30,7 +30,7 @@
 "Steam integration is installed and its files have been checked." = "Steam integration is installed and its files have been checked.";
 "Install the integration. Steam may close; quit your games first." = "Install the integration. Steam may close; quit your games first.";
 "NotProton is free. Its current supported runtime is CrossOver, which requires activation. Stable and Preview builds are supported only when a verified profile exists." = "NotProton is free. Its current supported runtime is CrossOver, which requires activation. Stable and Preview builds are supported only when a verified profile exists.";
-"This app requires macOS 26 or later. The available profiles are listed in Status; a version label alone does not establish compatibility." = "This app requires macOS 26 or later. The available profiles are listed in Status; a version label alone does not establish compatibility.";
+"This app requires macOS 15 or later. The available profiles are listed in Status; a version label alone does not establish compatibility." = "This app requires macOS 15 or later. The available profiles are listed in Status; a version label alone does not establish compatibility.";
 "CrossOver source" = "CrossOver source";
 "Choose CrossOver…" = "Choose CrossOver…";
 "Check again" = "Check again";
@@ -126,7 +126,7 @@
 "The first game launch may take longer." = "The first game launch may take longer.";
 "Ready" = "Ready";
 "Needs setup" = "Needs setup";
-"NotProton is free; CrossOver needs activation. This app requires macOS 26 or later. Exact supported builds are listed in Status." = "NotProton is free; CrossOver needs activation. This app requires macOS 26 or later. Exact supported builds are listed in Status.";
+"NotProton is free; CrossOver needs activation. This app requires macOS 15 or later. Exact supported builds are listed in Status." = "NotProton is free; CrossOver needs activation. This app requires macOS 15 or later. Exact supported builds are listed in Status.";
 "Open Privacy & Security → App Management. Enable the NotProton app you are using if it is listed. NotProton cannot reliably read whether this permission has been granted." = "Open Privacy & Security → App Management. Enable the NotProton app you are using if it is listed. NotProton cannot reliably read whether this permission has been granted.";
 "Steam may later request Input Monitoring for controllers. Full Disk Access is not a general setup requirement." = "Steam may later request Input Monitoring for controllers. Full Disk Access is not a general setup requirement.";
 "Installation may close Steam and also prepare an activated CrossOver runtime. A failed step stays open so you can correct it and retry." = "Installation may close Steam and also prepare an activated CrossOver runtime. A failed step stays open so you can correct it and retry.";
