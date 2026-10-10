@@ -209,6 +209,14 @@ jobs:
           FLAGS=""
           [ "$PRE" = "true" ] && FLAGS="--prerelease"
 
+          # Only the newest upstream release should carry the "Latest" badge
+          LATEST_UP=$(gh api "repos/$UPSTREAM/releases/latest" --jq .tag_name 2>/dev/null || true)
+          if [ "$TAG" = "$LATEST_UP" ]; then
+            FLAGS="$FLAGS --latest"
+          else
+            FLAGS="$FLAGS --latest=false"
+          fi
+
           # Replace an existing re-release (manual rebuilds)
           gh release delete "$NEW" --repo "$GITHUB_REPOSITORY" --cleanup-tag -y 2>/dev/null || true
 
